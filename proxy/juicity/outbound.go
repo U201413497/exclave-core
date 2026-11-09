@@ -2,8 +2,12 @@ package juicity
 
 import (
 	"context"
+	"math/rand"
 	"os"
+	"strconv"
+	"strings"
 	"sync"
+	"time"
 
 	juicity "github.com/exclavenetwork/sing-juicity"
 	"github.com/sagernet/sing/common/bufio"
@@ -36,38 +40,149 @@ var (
 )
 
 type Outbound struct {
-	serverAddr   net.Destination
+	baseAddr     net.Address
+	ports        []uint16
+	hopInterval  time.Duration
 	options      juicity.ClientOptions
 	client       *juicity.Client
 	clientAccess sync.Mutex
+	portIndex    int
+	lastHop      time.Time
+	currentPort  uint16
+}
+
+// parsePortList 解析 "443" / "3000-3100" / "3000,3005,3010"
+func parsePortList(s string, fallback uint16) []uint16 {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		if fallback == 0 {
+			return nil
+		}
+		return []uint16{fallback}
+	}
+	var out []uint16
+	seen := map[uint16]struct{}{}
+	add := func(p uint16) {
+		if p == 0 {
+			return
+		}
+		if _, ok := seen[p]; ok {
+			return
+		}
+		seen[p] = struct{}{}
+		out = append(out, p)
+	}
+	for _, part := range strings.Split(s, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		if strings.Contains(part, "-") {
+			ab := strings.SplitN(part, "-", 2)
+			if len(ab) != 2 {
+				continue
+			}
+			a, err1 := strconv.ParseUint(strings.TrimSpace(ab[0]), 10, 16)
+			b, err2 := strconv.ParseUint(strings.TrimSpace(ab[1]), 10, 16)
+			if err1 != nil || err2 != nil || a == 0 || b == 0 {
+				continue
+			}
+			if a > b {
+				a, b = b, a
+			}
+			// 范围过大时抽样，避免上万端口占内存（可选上限）
+			if b-a > 4096 {
+				b = a + 4096
+			}
+			for p := a; p <= b; p++ {
+				add(uint16(p))
+			}
+		} else {
+			p, err := strconv.ParseUint(part, 10, 16)
+			if err != nil {
+				continue
+			}
+			add(uint16(p))
+		}
+	}
+	if len(out) == 0 {
+		if fallback == 0 {
+			return nil
+		}
+		return []uint16{fallback}
+	}
+	return out
 }
 
 func NewClient(ctx context.Context, config *ClientConfig) (*Outbound, error) {
-	o := &Outbound{
-		serverAddr: net.Destination{
-			Address: config.Address.AsAddress(),
-			Port:    net.Port(config.Port),
-			Network: net.Network_UDP,
-		},
+	fallback := uint16(config.Port)
+	ports := parsePortList(config.GetHopPorts(), fallback)
+	if len(ports) == 0 {
+		return nil, newError("no valid port configured")
 	}
-	uuid, err := uuid.ParseHexDashString(config.Uuid)
+
+	idx := 0
+	if len(ports) > 1 {
+		idx = rand.Intn(len(ports))
+	}
+
+	o := &Outbound{
+		baseAddr:    config.Address.AsAddress(),
+		ports:       ports,
+		hopInterval: time.Duration(config.GetHopInterval()) * time.Second,
+		portIndex:   idx,
+		currentPort: ports[idx],
+	}
+
+	uid, err := uuid.ParseHexDashString(config.Uuid)
 	if err != nil {
 		return nil, newError("invalid uuid")
 	}
 
+	dest := o.serverDestination()
 	o.options = juicity.ClientOptions{
 		Context:       ctx,
-		ServerAddress: singbridge.ToSocksAddr(o.serverAddr),
-		UUID:          uuid,
+		ServerAddress: singbridge.ToSocksAddr(dest),
+		UUID:          uid,
 		Password:      config.Password,
 	}
-
 	return o, nil
+}
+
+func (o *Outbound) serverDestination() net.Destination {
+	return net.Destination{
+		Address: o.baseAddr,
+		Port:    net.Port(o.currentPort),
+		Network: net.Network_UDP,
+	}
+}
+
+func (o *Outbound) maybeHopLocked() {
+	// 单端口或未设置间隔：不跳跃
+	if o.hopInterval <= 0 || len(o.ports) <= 1 {
+		return
+	}
+	if !o.lastHop.IsZero() && time.Since(o.lastHop) < o.hopInterval {
+		return
+	}
+	o.portIndex = (o.portIndex + 1) % len(o.ports)
+	o.currentPort = o.ports[o.portIndex]
+	o.lastHop = time.Now()
+	if o.client != nil {
+		_ = o.client.CloseWithError(os.ErrClosed)
+		o.client = nil
+	}
+	dest := o.serverDestination()
+	o.options.ServerAddress = singbridge.ToSocksAddr(dest)
+	newError("juicity port hop: switched to ", dest.NetAddr()).AtInfo().WriteToLog()
 }
 
 func (o *Outbound) getClient(ctx context.Context, dialer internet.Dialer) (*juicity.Client, error) {
 	o.clientAccess.Lock()
 	defer o.clientAccess.Unlock()
+
+	o.maybeHopLocked()
+
 	if o.client != nil {
 		return o.client, nil
 	}
@@ -89,14 +204,19 @@ func (o *Outbound) getClient(ctx context.Context, dialer internet.Dialer) (*juic
 	if !ok {
 		return nil, newError("tls not enabled")
 	}
+	dest := o.serverDestination()
 	options := o.options
-	options.TLSConfig = singbridge.NewTLSConfigWrapper(ctx, tlsSettings, v2tls.WithDestination(o.serverAddr), v2tls.WithNextProto("h3"))
+	options.ServerAddress = singbridge.ToSocksAddr(dest)
+	options.TLSConfig = singbridge.NewTLSConfigWrapper(ctx, tlsSettings, v2tls.WithDestination(dest), v2tls.WithNextProto("h3"))
 	options.Dialer = singbridge.NewQUICDialerWrapper(dialer)
 	client, err := juicity.NewClient(options)
 	if err != nil {
 		return nil, err
 	}
 	o.client = client
+	if o.lastHop.IsZero() {
+		o.lastHop = time.Now()
+	}
 	return client, nil
 }
 
@@ -112,7 +232,7 @@ func (o *Outbound) Process(ctx context.Context, link *transport.Link, dialer int
 	}
 	destination := outbound.Target
 
-	newError("tunneling request to ", destination, " via ", o.serverAddr.NetAddr()).WriteToLog(session.ExportIDToError(ctx))
+	newError("tunneling request to ", destination, " via ", o.serverDestination().NetAddr()).WriteToLog(session.ExportIDToError(ctx))
 
 	if destination.Network == net.Network_TCP {
 		serverConn, err := client.DialConn(ctx, singbridge.ToSocksAddr(destination))
@@ -120,7 +240,6 @@ func (o *Outbound) Process(ctx context.Context, link *transport.Link, dialer int
 			return err
 		}
 
-		// for server-speaks-first protocols
 		var firstPayload []byte
 		if reader, ok := link.Reader.(buf.TimeoutReader); ok {
 			if mb, _ := reader.ReadMultiBufferTimeout(proxy.FirstPayloadTimeout); mb != nil {
@@ -139,15 +258,14 @@ func (o *Outbound) Process(ctx context.Context, link *transport.Link, dialer int
 			serverConn.Close()
 			return singbridge.ReturnError(err)
 		}
-
 		return singbridge.ReturnError(bufio.CopyConn(ctx, singbridge.NewPipeConnWrapper(link), serverConn))
-	} else {
-		serverConn, err := client.ListenPacket(ctx, singbridge.ToSocksAddr(destination))
-		if err != nil {
-			return err
-		}
-		return singbridge.ReturnError(bufio.CopyPacketConn(ctx, singbridge.NewPacketConnWrapper(link, destination), serverConn.(network.PacketConn)))
 	}
+
+	serverConn, err := client.ListenPacket(ctx, singbridge.ToSocksAddr(destination))
+	if err != nil {
+		return err
+	}
+	return singbridge.ReturnError(bufio.CopyPacketConn(ctx, singbridge.NewPacketConnWrapper(link, destination), serverConn.(network.PacketConn)))
 }
 
 func (o *Outbound) InterfaceUpdate() {
