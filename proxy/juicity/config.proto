@@ -14,7 +14,12 @@ message ClientConfig {
   option (exclave.core.common.protoext.message_opt).short_name = "juicity";
 
   exclave.core.common.net.IPOrDomain address = 1;
+  // 单端口时的主端口；若 hop_ports 非空，仅作回退
   uint32 port = 2;
   string uuid = 3;
   string password = 4;
+  // 单端口或范围，如 "443" / "3000-3100" / "3000,3005,3010"
+  string hop_ports = 5;
+  // 跳跃间隔（秒）。端口数 > 1 且 > 0 时启用跳跃
+  uint64 hop_interval = 6;
 }
