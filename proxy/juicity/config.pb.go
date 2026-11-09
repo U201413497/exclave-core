@@ -11,9 +11,7 @@ import (
 )
 
 const (
-	// Verify that this generated code is sufficiently up-to-date.
 	_ = protoimpl.EnforceVersion(20 - protoimpl.MinVersion)
-	// Verify that runtime/protoimpl is sufficiently up-to-date.
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
@@ -23,6 +21,8 @@ type ClientConfig struct {
 	Port          uint32                 `protobuf:"varint,2,opt,name=port,proto3" json:"port,omitempty"`
 	Uuid          string                 `protobuf:"bytes,3,opt,name=uuid,proto3" json:"uuid,omitempty"`
 	Password      string                 `protobuf:"bytes,4,opt,name=password,proto3" json:"password,omitempty"`
+	HopPorts      string                 `protobuf:"bytes,5,opt,name=hop_ports,json=hopPorts,proto3" json:"hop_ports,omitempty"`
+	HopInterval   uint64                 `protobuf:"varint,6,opt,name=hop_interval,json=hopInterval,proto3" json:"hop_interval,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -52,7 +52,6 @@ func (x *ClientConfig) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use ClientConfig.ProtoReflect.Descriptor instead.
 func (*ClientConfig) Descriptor() ([]byte, []int) {
 	return file_proxy_juicity_config_proto_rawDescGZIP(), []int{0}
 }
@@ -85,16 +84,32 @@ func (x *ClientConfig) GetPassword() string {
 	return ""
 }
 
+func (x *ClientConfig) GetHopPorts() string {
+	if x != nil {
+		return x.HopPorts
+	}
+	return ""
+}
+
+func (x *ClientConfig) GetHopInterval() uint64 {
+	if x != nil {
+		return x.HopInterval
+	}
+	return 0
+}
+
 var File_proxy_juicity_config_proto protoreflect.FileDescriptor
 
 const file_proxy_juicity_config_proto_rawDesc = "" +
 	"\n" +
-	"\x1aproxy/juicity/config.proto\x12\x1aexclave.core.proxy.juicity\x1a common/protoext/extensions.proto\x1a\x18common/net/address.proto\"\xaa\x01\n" +
+	"\x1aproxy/juicity/config.proto\x12\x1aexclave.core.proxy.juicity\x1a common/protoext/extensions.proto\x1a\x18common/net/address.proto\"\xea\x01\n" +
 	"\fClientConfig\x12=\n" +
 	"\aaddress\x18\x01 \x01(\v2#.exclave.core.common.net.IPOrDomainR\aaddress\x12\x12\n" +
 	"\x04port\x18\x02 \x01(\rR\x04port\x12\x12\n" +
 	"\x04uuid\x18\x03 \x01(\tR\x04uuid\x12\x1a\n" +
-	"\bpassword\x18\x04 \x01(\tR\bpassword:\x17\x82\xb5\x18\x13\n" +
+	"\bpassword\x18\x04 \x01(\tR\bpassword\x12\x1b\n" +
+	"\thop_ports\x18\x05 \x01(\tR\bhopPorts\x12!\n" +
+	"\fhop_interval\x18\x06 \x01(\x04R\vhopInterval:\x17\x82\xb5\x18\x13\n" +
 	"\boutbound\x12\ajuicityB\x8e\x01\n" +
 	"4com.github.exclavenetwork.exclave.core.proxy.juicityP\x01Z7github.com/exclavenetwork/exclave-core/v5/proxy/juicity\xaa\x02\x1aExclave.Core.Proxy.Juicityb\x06proto3"
 
@@ -112,16 +127,12 @@ func file_proxy_juicity_config_proto_rawDescGZIP() []byte {
 
 var file_proxy_juicity_config_proto_msgTypes = make([]protoimpl.MessageInfo, 1)
 var file_proxy_juicity_config_proto_goTypes = []any{
-	(*ClientConfig)(nil),   // 0: exclave.core.proxy.juicity.ClientConfig
-	(*net.IPOrDomain)(nil), // 1: exclave.core.common.net.IPOrDomain
+	(*ClientConfig)(nil),
+	(*net.IPOrDomain)(nil),
 }
 var file_proxy_juicity_config_proto_depIdxs = []int32{
-	1, // 0: exclave.core.proxy.juicity.ClientConfig.address:type_name -> exclave.core.common.net.IPOrDomain
-	1, // [1:1] is the sub-list for method output_type
-	1, // [1:1] is the sub-list for method input_type
-	1, // [1:1] is the sub-list for extension type_name
-	1, // [1:1] is the sub-list for extension extendee
-	0, // [0:1] is the sub-list for field type_name
+	1,
+	1, 1, 1, 1, 0,
 }
 
 func init() { file_proxy_juicity_config_proto_init() }
